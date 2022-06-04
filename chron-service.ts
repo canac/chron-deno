@@ -53,6 +53,9 @@ type Job =
 
     // The process of this job if it is currently running
     process: Deno.Process | undefined;
+
+    // Signal to terminate the execution of the job
+    abortSignal: AbortSignal;
   }
   & ({
     type: "startup";
@@ -70,6 +73,7 @@ export class ChronService {
 
   #statusDb: Database<RunStatusEntry>;
   #jobs = new Map<string, Job>();
+  #abortController = new AbortController();
   #mailbox: Mailbox;
 
   // `port` is the port that the HTTP server will listen on, or null to not start the server
@@ -98,17 +102,25 @@ export class ChronService {
   ) {
     this.#validateName(name);
 
+    // Save the current abort controller
+    const abortController = this.#abortController;
+
     const job: Job = {
       type: "startup",
       name,
       command,
       logFile: join(this.#logDir, `${name}.log`),
       process: undefined,
+      abortSignal: abortController.signal,
     };
     this.#jobs.set(name, job);
 
     // Re-run the job if it ever fails
     while (true) {
+      if (abortController.signal.aborted) {
+        break;
+      }
+
       await this.#executeJob(job);
 
       // Wait a few seconds before running again
@@ -124,6 +136,9 @@ export class ChronService {
   ) {
     this.#validateName(name);
 
+    // Save the current abort controller
+    const abortController = this.#abortController;
+
     const cronSchedule = new Cron(
       schedule,
       () => this.#executeJob(job),
@@ -135,12 +150,31 @@ export class ChronService {
       schedule: cronSchedule,
       logFile: join(this.#logDir, `${name}.log`),
       process: undefined,
+      abortSignal: abortController.signal,
     };
     this.#jobs.set(name, job);
+
+    abortController.signal.addEventListener("abort", () => {
+      cronSchedule.stop();
+    });
+  }
+
+  // Stop and remove all jobs
+  reset() {
+    this.#abortController.abort();
+    this.#jobs.clear();
+
+    // All future jobs will be linked to a new abort controller
+    this.#abortController = new AbortController();
   }
 
   // Helper function to execute a command with the environment and logging configured
   async #executeJob(job: Job) {
+    if (job.abortSignal.aborted) {
+      // Abort because the job is already marked as aborted
+      return;
+    }
+
     const startTime = new Date();
 
     await writeAllString(
@@ -178,7 +212,12 @@ export class ChronService {
       env,
     });
     job.process = process;
+    const onAbort = () => {
+      process.kill("SIGTERM");
+    };
+    job.abortSignal.addEventListener("abort", onAbort);
     const status = await process.status();
+    job.abortSignal.removeEventListener("abort", onAbort);
     job.process = undefined;
 
     // Update the run status with the command's status code

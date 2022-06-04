@@ -1,6 +1,6 @@
 {
   "tasks": {
-    "run": "deno run --allow-env=HOME,PORT --allow-net=0.0.0.0:$PORT --allow-run=sh --allow-read=$HOME/.local/share/chron,chronfile.toml --allow-write=$HOME/.local/share/chron main.ts -- chronfile.toml",
-    "run-watch": "deno run --allow-env=HOME,PORT --allow-net=0.0.0.0:$PORT --allow-run=sh --allow-read=$HOME/.local/share/chron,chronfile.toml --allow-write=$HOME/.local/share/chron --watch main.ts -- chronfile.toml"
+    "run": "deno run --allow-env=HOME,PORT --allow-net=0.0.0.0:$PORT --allow-run --allow-read=$HOME/.local/share/chron,chronfile.toml --allow-write=$HOME/.local/share/chron main.ts -- chronfile.toml",
+    "run-watch": "deno run --allow-env=HOME,PORT --allow-net=0.0.0.0:$PORT --allow-run --allow-read=$HOME/.local/share/chron,chronfile.toml --allow-write=$HOME/.local/share/chron --watch main.ts -- chronfile.toml"
   }
 }
