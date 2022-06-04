@@ -10,7 +10,7 @@ const chron = new ChronService({
 
 const chronfilePath = Deno.args[1];
 if (!chronfilePath) {
-  console.error("No chronfile provided\n\nUsage:\n  chron [chronfile.toml]");
+  console.error("No chronfile provided\n\nUsage:\n  chron <chronfile.toml>");
   Deno.exit(1);
 }
 
