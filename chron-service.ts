@@ -1,6 +1,7 @@
 import { ensureDir } from "https://deno.land/std@0.142.0/fs/mod.ts";
 import { serveFile } from "https://deno.land/std@0.142.0/http/file_server.ts";
 import { serve } from "https://deno.land/std@0.142.0/http/server.ts";
+import { join } from "https://deno.land/std@0.142.0/path/mod.ts";
 import { writeAll } from "https://deno.land/std@0.142.0/streams/conversion.ts";
 import { Database } from "https://denopkg.com/canac/AloeDB@0.9.1/mod.ts";
 import { Cron } from "https://deno.land/x/croner@4.2.0/src/croner.js";
@@ -28,25 +29,47 @@ function handleFsError(err: unknown): Response {
   }
 }
 
+// Represents either a startup job or a scheduled job
+type Job =
+  & {
+    // The name of the job
+    name: string;
+
+    // The shell command that this job executes
+    command: string;
+
+    // The path of the log file that command output will be written to
+    logFile: string;
+
+    // The process of this job if it is currently running
+    process: Deno.Process | undefined;
+  }
+  & ({
+    type: "startup";
+  } | {
+    type: "scheduled";
+
+    // The job scheduler
+    schedule: Cron;
+  });
+
 export class ChronService {
   #chronDir: string;
   #logDir: string;
   #port: number | undefined;
 
   #statusDb: Database<RunStatusEntry>;
-  #scheduledJobs = new Map<string, Cron>();
-  #startupJobs = new Set<string>();
-  #runningProcesses = new Map<string, Deno.Process | undefined>();
+  #jobs = new Map<string, Job>();
   #mailbox: Mailbox;
 
   // `port` is the port that the HTTP server will listen on, or null to not start the server
   // `chronDir` is the directory to store data and logs, defaulting to the current directory
   constructor(options: { port?: number; chronDir?: string } = {}) {
     this.#chronDir = options.chronDir ?? ".";
-    this.#logDir = `${this.#chronDir}/logs`;
-    this.#statusDb = new Database<RunStatusEntry>(
-      `${this.#chronDir}/jobStatus.json`,
-    );
+    this.#logDir = join(this.#chronDir, "logs"),
+      this.#statusDb = new Database<RunStatusEntry>(
+        join(this.#chronDir, "jobStatus.json"),
+      );
     this.#mailbox = new Mailbox(this.#chronDir);
 
     this.#port = options.port;
@@ -55,59 +78,74 @@ export class ChronService {
     }
   }
 
-  // Register a command to run on startup
+  // Register a job to run on startup
   async startup(
     name: string,
     command: string,
   ) {
     this.#validateName(name);
-    if (this.#startupJobs.has(name)) {
-      throw new Error("Startup command with this name already exists");
-    }
-    this.#startupJobs.add(name);
 
-    // Rerun the command if it ever fails
+    const job: Job = {
+      type: "startup",
+      name,
+      command,
+      logFile: join(this.#logDir, `${name}.log`),
+      process: undefined,
+    };
+    this.#jobs.set(name, job);
+
+    // Re-run the job if it ever fails
     while (true) {
-      await this.#runCommand(name, command);
+      await this.#executeJob(job);
 
       // Wait a few seconds before running again
       await sleep(5);
     }
   }
 
-  // Register a command to run on a certain schedule
+  // Register a job to run on a certain schedule
   async schedule(
     name: string,
     schedule: string,
     command: string,
   ) {
     this.#validateName(name);
-    if (this.#scheduledJobs.has(name)) {
-      throw new Error("Scheduled job with this name already exists");
-    }
 
-    const job = new Cron(schedule, () => this.#runCommand(name, command));
-    this.#scheduledJobs.set(name, job);
+    const cronSchedule = new Cron(
+      schedule,
+      () => this.#executeJob(job),
+    );
+    const job: Job = {
+      type: "scheduled",
+      name,
+      command,
+      schedule: cronSchedule,
+      logFile: join(this.#logDir, `${name}.log`),
+      process: undefined,
+    };
+    this.#jobs.set(name, job);
   }
 
-  // Helper function to run a command and configure logging
-  async #runCommand(name: string, command: string) {
+  // Helper function to execute a command with the environment and logging configured
+  async #executeJob(job: Job) {
     const startTime = new Date();
 
-    console.log(`${startTime.toISOString()} Running ${name}: ${command}`);
+    console.log(
+      `${startTime.toISOString()} Running ${job.name}: ${job.command}`,
+    );
 
-    // Save the run invocation to the database
+    // Record the run in the database
     const id = crypto.randomUUID();
     await this.#statusDb.insertOne({
       id,
-      name,
+      name: job.name,
       timestamp: startTime.getTime(),
     });
 
-    // Open the log file
+    // Open the log file and write the header
     await ensureDir(this.#logDir);
     const logFile = await Deno.open(
-      `${this.#logDir}/${name}.log`,
+      job.logFile,
       { append: true, create: true },
     );
     const headerBytes = new TextEncoder().encode(
@@ -115,38 +153,48 @@ export class ChronService {
     );
     await writeAll(logFile, headerBytes);
 
-    // Run the command and clone the log file after the command completes
+    // Run the shell command and clone the log file after the it completes
     const env = this.#port
-      ? { CHRON_MAILBOX_URL: `http://0.0.0.0:${this.#port}/mailbox/${name}` }
+      ? {
+        CHRON_MAILBOX_URL: `http://0.0.0.0:${this.#port}/mailbox/${job.name}`,
+      }
       : undefined;
     const process = Deno.run({
-      cmd: ["sh", "-c", command],
+      cmd: ["sh", "-c", job.command],
       stdout: logFile.rid,
       stderr: logFile.rid,
       env,
     });
-    this.#runningProcesses.set(name, process);
+    job.process = process;
     const status = await process.status();
+    job.process = undefined;
+
+    // Update the run status with the command's status code
+    await this.#statusDb.updateOne({ id }, { statusCode: status.code });
+
     if (!status.success) {
+      // Post failures to the @errors mailbox
       this.#mailbox.addMessage(
         "@errors",
-        `${name} failed with status code ${status.code}`,
+        `${job.name} failed with status code ${status.code}`,
       );
     }
-    this.#runningProcesses.set(name, undefined);
+
+    // Write the log file footer and close the log file
     const statusBytes = new TextEncoder().encode(`Status: ${status.code}\n`);
     await writeAll(logFile, statusBytes);
     Deno.close(logFile.rid);
-
-    // Update the run status with the status code
-    await this.#statusDb.updateOne({ id }, { statusCode: status.code });
   }
 
-  // Throw an exception if the provided name is a valid command name
+  // Throw an exception if the provided name is a valid job name
   // It must be in kebab case
   #validateName(name: string): void {
     if (!/^[a-zA-Z0-9]+(-[a-zA-Z0-9]+)*$/.test(name)) {
-      throw new Error("Invalid command name");
+      throw new Error("Invalid job name");
+    }
+
+    if (this.#jobs.has(name)) {
+      throw new Error("A job with this name already exists");
     }
   }
 
@@ -157,31 +205,30 @@ export class ChronService {
     const rebootPattern = new URLPattern({ pathname: "/reboot/:name" });
     const url = new URL(req.url);
     if (req.method === "GET" && url.pathname === "/status") {
-      const names = Array.from(
-        new Set([
-          ...this.#scheduledJobs.keys(),
-          ...this.#runningProcesses.keys(),
-        ]),
-      );
       return Response.json(
-        await Promise.all(names.map(async (name) => {
-          // Show the most recent three runs
-          const recentRuns = (await this.#statusDb.findMany({ name })).sort((
-            r1,
-            r2,
-          ) => r1.timestamp - r2.timestamp).slice(-3).map((
-            { timestamp, statusCode },
-          ) => ({
-            timestamp: new Date(timestamp).toISOString(),
-            statusCode,
-          }));
-          return {
-            name,
-            runs: recentRuns,
-            nextRun: this.#scheduledJobs.get(name)?.next()?.toISOString(),
-            pid: this.#runningProcesses.get(name)?.pid,
-          };
-        })),
+        await Promise.all(
+          Array.from(this.#jobs.values()).map(async (job) => {
+            // Show the most recent three runs
+            const recentRuns =
+              (await this.#statusDb.findMany({ name: job.name })).sort((
+                r1,
+                r2,
+              ) => r1.timestamp - r2.timestamp).slice(-3).map((
+                { timestamp, statusCode },
+              ) => ({
+                timestamp: new Date(timestamp).toISOString(),
+                statusCode,
+              }));
+            return {
+              name: job.name,
+              runs: recentRuns,
+              nextRun: job.type === "scheduled"
+                ? job.schedule.next()?.toISOString()
+                : undefined,
+              pid: job.process?.pid,
+            };
+          }),
+        ),
       );
     }
 
@@ -219,14 +266,16 @@ export class ChronService {
     matches = rebootPattern.exec(req.url);
     if (req.method === "POST" && matches) {
       const { name } = matches.pathname.groups;
-      if (!this.#runningProcesses.has(name)) {
+      if (!this.#jobs.has(name)) {
         return new Response("Job Not Found", { status: 404 });
       }
 
-      const process = this.#runningProcesses.get(name);
-      if (typeof process !== "undefined") {
+      const process = this.#jobs.get(name)?.process;
+      if (process) {
         process.kill("SIGTERM");
         return new Response("Job Rebooted");
+      } else {
+        return new Response("Job Not Running");
       }
     }
 
