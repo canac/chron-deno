@@ -84,7 +84,10 @@ export class ChronService {
 
     this.#port = options.port;
     if (typeof this.#port !== "undefined") {
-      serve((req) => this.#httpHandler(req), { port: this.#port });
+      serve((req) => this.#httpHandler(req), {
+        port: this.#port,
+        onListen: undefined,
+      });
     }
   }
 
@@ -140,8 +143,9 @@ export class ChronService {
   async #executeJob(job: Job) {
     const startTime = new Date();
 
-    console.log(
-      `${startTime.toISOString()} Running ${job.name}: ${job.command}`,
+    await writeAllString(
+      Deno.stderr,
+      `${startTime.toISOString()} Running ${job.name}: ${job.command}\n`,
     );
 
     // Record the run in the database
