@@ -29,6 +29,16 @@ function handleFsError(err: unknown): Response {
   }
 }
 
+// Write the content encoded as a UTF8 to the writer
+const encoder = new TextEncoder();
+async function writeAllString(
+  writer: Deno.Writer,
+  content: string,
+): Promise<void> {
+  const encoded = encoder.encode(content);
+  writeAll(writer, encoded);
+}
+
 // Represents either a startup job or a scheduled job
 type Job =
   & {
@@ -148,10 +158,8 @@ export class ChronService {
       job.logFile,
       { append: true, create: true },
     );
-    const headerBytes = new TextEncoder().encode(
-      `${startTime.toString()}\n${"-".repeat(80)}\n`,
-    );
-    await writeAll(logFile, headerBytes);
+    const divider = "-".repeat(80);
+    await writeAllString(logFile, `${startTime.toString()}\n${divider}\n`);
 
     // Run the shell command and clone the log file after the it completes
     const env = this.#port
@@ -181,8 +189,7 @@ export class ChronService {
     }
 
     // Write the log file footer and close the log file
-    const statusBytes = new TextEncoder().encode(`Status: ${status.code}\n`);
-    await writeAll(logFile, statusBytes);
+    await writeAllString(logFile, `${divider}\nStatus: ${status.code}\n\n`);
     Deno.close(logFile.rid);
   }
 
