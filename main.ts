@@ -1,12 +1,6 @@
-import { parse as parseToml } from "https://deno.land/std@0.142.0/encoding/toml.ts";
-import { z } from "https://deno.land/x/zod@v3.17.3/mod.ts";
+import { debounce } from "https://deno.land/std@0.142.0/async/debounce.ts";
 import { ChronService } from "./chron-service.ts";
-
-const chronfileSchema = z.object({
-  startup: z.record(z.object({ command: z.string() })).default({}),
-  schedule: z.record(z.object({ schedule: z.string(), command: z.string() }))
-    .default({}),
-});
+import { load } from "./chronfile.ts";
 
 const port = parseInt(Deno.env.get("PORT") ?? "", 10);
 const chron = new ChronService({
@@ -19,12 +13,21 @@ if (!chronfilePath) {
   console.error("No chronfile provided\n\nUsage:\n  chron [chronfile.toml]");
   Deno.exit(1);
 }
-const chronfile = chronfileSchema.parse(
-  parseToml(await Deno.readTextFile(chronfilePath)),
-);
-Object.entries(chronfile.startup).forEach(([name, { command }]) => {
-  chron.startup(name, command);
-});
-Object.entries(chronfile.schedule).forEach(([name, { schedule, command }]) => {
-  chron.schedule(name, schedule, command);
-});
+
+await load(chron, chronfilePath);
+
+// Watch the chronfile and reload on changes
+const watcher = Deno.watchFs(chronfilePath);
+const debouncedLoad = debounce(async () => {
+  console.log("Chronfile changed. Reloading...");
+  try {
+    await load(chron, chronfilePath);
+  } catch (err) {
+    console.log(err);
+  }
+}, 1000);
+for await (const event of watcher) {
+  if (event.kind === "modify" || event.kind === "remove") {
+    debouncedLoad();
+  }
+}
