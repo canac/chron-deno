@@ -8,7 +8,7 @@ const chron = new ChronService({
   chronDir: `${Deno.env.get("HOME")}/.local/share/chron`,
 });
 
-const chronfilePath = Deno.args[1];
+const chronfilePath = Deno.args[0];
 if (!chronfilePath) {
   console.error("No chronfile provided\n\nUsage:\n  chron <chronfile.toml>");
   Deno.exit(1);
