@@ -200,85 +200,88 @@ export class ChronService {
 
   // Handle HTTP requests
   async #httpHandler(req: Request): Promise<Response> {
-    const logPattern = new URLPattern({ pathname: "/log/:name" });
-    const mailboxPattern = new URLPattern({ pathname: "/mailbox/:name" });
-    const rebootPattern = new URLPattern({ pathname: "/reboot/:name" });
     const url = new URL(req.url);
-    if (req.method === "GET" && url.pathname === "/status") {
+    if (req.method === "GET" && url.pathname === "/") {
       return Response.json(
-        await Promise.all(
-          Array.from(this.#jobs.values()).map(async (job) => {
-            // Show the most recent three runs
-            const recentRuns =
-              (await this.#statusDb.findMany({ name: job.name })).sort((
-                r1,
-                r2,
-              ) => r1.timestamp - r2.timestamp).slice(-3).map((
-                { timestamp, statusCode },
-              ) => ({
-                timestamp: new Date(timestamp).toISOString(),
-                statusCode,
-              }));
-            return {
-              name: job.name,
-              runs: recentRuns,
-              nextRun: job.type === "scheduled"
-                ? job.schedule.next()?.toISOString()
-                : undefined,
-              pid: job.process?.pid,
-            };
-          }),
-        ),
+        Array.from(this.#jobs.values()).map((job) => ({
+          name: job.name,
+          running: Boolean(job.process),
+        })),
       );
     }
 
-    let matches;
+    const pattern = new URLPattern({ pathname: "/:job/:command" });
+    const matches = pattern.exec(req.url);
+    if (!matches) {
+      return new Response("Bad Request", { status: 400 });
+    }
 
-    matches = logPattern.exec(req.url);
-    if (matches) {
-      const { name } = matches.pathname.groups;
-      const logFile = `${this.#logDir}/${name}.log`;
+    const job = this.#jobs.get(matches.pathname.groups.job);
+    if (!job) {
+      return new Response("Not Found", { status: 404 });
+    }
+
+    const { command } = matches.pathname.groups;
+    if (command === "status") {
       if (req.method === "GET") {
-        return serveFile(req, logFile).catch(handleFsError);
+        // Find the job's most recent three runs
+        const recentRuns = (await this.#statusDb.findMany({ name: job.name }))
+          .sort((
+            r1,
+            r2,
+          ) => r1.timestamp - r2.timestamp).slice(-3).map((
+            { timestamp, statusCode },
+          ) => ({
+            timestamp: new Date(timestamp).toISOString(),
+            statusCode,
+          }));
+        return Response.json({
+          name: job.name,
+          type: job.type,
+          runs: recentRuns,
+          nextRun: job.type === "scheduled"
+            ? job.schedule.next()?.toISOString()
+            : undefined,
+          pid: job.process?.pid,
+        });
+      }
+
+      return new Response("Invalid Method", { status: 405 });
+    } else if (command === "logs") {
+      if (req.method === "GET") {
+        return serveFile(req, job.logFile).catch(handleFsError);
       } else if (req.method === "DELETE") {
-        return Deno.remove(logFile)
+        return Deno.remove(job.logFile)
           .then(() => new Response("Deleted log file"))
           .catch(handleFsError);
       }
-    }
 
-    matches = mailboxPattern.exec(req.url);
-    if (matches) {
-      const { name } = matches.pathname.groups;
+      return new Response("Invalid Method", { status: 405 });
+    } else if (command === "mailbox") {
       if (req.method === "GET") {
-        return Response.json(await this.#mailbox.getMessages(name));
+        return Response.json(await this.#mailbox.getMessages(job.name));
       } else if (req.method === "POST") {
         return Response.json(
-          await this.#mailbox.addMessage(name, await req.text()),
+          await this.#mailbox.addMessage(job.name, await req.text()),
         );
       } else if (req.method === "DELETE") {
-        return Response.json(await this.#mailbox.clearMessages(name));
-      } else {
-        return new Response("Invalid Method", { status: 405 });
+        return Response.json(await this.#mailbox.clearMessages(job.name));
       }
+
+      return new Response("Invalid Method", { status: 405 });
+    } else if (command === "terminate") {
+      if (req.method === "POST") {
+        if (job.process) {
+          job.process.kill("SIGTERM");
+          return new Response("Terminated job");
+        } else {
+          return new Response("Job not running");
+        }
+      }
+
+      return new Response("Invalid Method", { status: 405 });
     }
 
-    matches = rebootPattern.exec(req.url);
-    if (req.method === "POST" && matches) {
-      const { name } = matches.pathname.groups;
-      if (!this.#jobs.has(name)) {
-        return new Response("Job Not Found", { status: 404 });
-      }
-
-      const process = this.#jobs.get(name)?.process;
-      if (process) {
-        process.kill("SIGTERM");
-        return new Response("Job Rebooted");
-      } else {
-        return new Response("Job Not Running");
-      }
-    }
-
-    return new Response("Not Found", { status: 404 });
+    return new Response("Bad Request", { status: 400 });
   }
 }
