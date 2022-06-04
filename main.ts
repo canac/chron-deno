@@ -1,6 +1,6 @@
 import { debounce } from "https://deno.land/std@0.142.0/async/debounce.ts";
-import { ChronService } from "./chron-service.ts";
-import { load } from "./chronfile.ts";
+import { ChronService } from "./src/chron-service.ts";
+import { load } from "./src/chronfile.ts";
 
 const port = parseInt(Deno.env.get("PORT") ?? "", 10);
 const chron = new ChronService({
