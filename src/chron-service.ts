@@ -80,10 +80,10 @@ export class ChronService {
   // `chronDir` is the directory to store data and logs, defaulting to the current directory
   constructor(options: { port?: number; chronDir?: string } = {}) {
     this.#chronDir = options.chronDir ?? ".";
-    this.#logDir = join(this.#chronDir, "logs"),
-      this.#statusDb = new Database<RunStatusEntry>(
-        join(this.#chronDir, "jobStatus.json"),
-      );
+    this.#logDir = join(this.#chronDir, "logs");
+    this.#statusDb = new Database<RunStatusEntry>(
+      join(this.#chronDir, "jobStatus.json"),
+    );
     this.#mailbox = new Mailbox(this.#chronDir);
 
     this.#port = options.port;
