@@ -266,7 +266,8 @@ export class ChronService {
       return new Response("Bad Request", { status: 400 });
     }
 
-    const job = this.#jobs.get(matches.pathname.groups.job);
+    const jobName = matches.pathname.groups.job;
+    const job = typeof jobName !== "undefined" && this.#jobs.get(jobName);
     if (!job) {
       return new Response("Not Found", { status: 404 });
     }
