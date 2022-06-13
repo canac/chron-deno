@@ -4,9 +4,17 @@ import { serve } from "https://deno.land/std@0.142.0/http/server.ts";
 import { join } from "https://deno.land/std@0.142.0/path/mod.ts";
 import { writeAll } from "https://deno.land/std@0.142.0/streams/conversion.ts";
 import { Database } from "https://denopkg.com/canac/AloeDB@0.9.1/mod.ts";
-import { Cron } from "https://deno.land/x/croner@4.2.0/src/croner.js";
+import {
+  Cron,
+  IntervalBasedCronScheduler,
+  parseCronExpression,
+} from "https://cdn.skypack.dev/cron-schedule@3.0.6?dts";
 import { sleep } from "https://deno.land/x/sleep@v1.2.1/mod.ts";
 import { Mailbox } from "./mailbox.ts";
+
+export type ScheduleOptions = {
+  makeUpMissedRuns: number | "all";
+};
 
 type RunStatusEntry = {
   id: string;
@@ -64,6 +72,9 @@ type Job =
 
     // The job scheduler
     schedule: Cron;
+
+    // The job's task ID
+    schedulerTaskId: number;
   });
 
 export class ChronService {
@@ -74,6 +85,7 @@ export class ChronService {
   #statusDb: Database<RunStatusEntry>;
   #jobs = new Map<string, Job>();
   #abortController = new AbortController();
+  #scheduler = new IntervalBasedCronScheduler(1000);
   #mailbox: Mailbox;
 
   // `port` is the port that the HTTP server will listen on, or null to not start the server
@@ -133,35 +145,72 @@ export class ChronService {
     name: string,
     schedule: string,
     command: string,
+    options: ScheduleOptions,
   ) {
     this.#validateName(name);
 
     // Save the current abort controller
     const abortController = this.#abortController;
 
-    const cronSchedule = new Cron(
-      schedule,
+    const cronSchedule = parseCronExpression(schedule);
+    const schedulerTaskId = this.#scheduler.registerTask(
+      cronSchedule,
       () => this.#executeJob(job),
     );
     const job: Job = {
       type: "scheduled",
       name,
       command,
-      schedule: cronSchedule,
       logFile: join(this.#logDir, `${name}.log`),
       process: undefined,
       abortSignal: abortController.signal,
+      schedule: cronSchedule,
+      schedulerTaskId,
     };
     this.#jobs.set(name, job);
 
-    abortController.signal.addEventListener("abort", () => {
-      cronSchedule.stop();
-    });
+    // Count how many runs have been missed
+    // If the job hasn't run before, then 0 runs have been missed
+    let missedRuns: number = 0;
+    const lastRunTime = (await this.#getLastRuns(name))[0]?.timestamp;
+    if (typeof lastRunTime !== "undefined") {
+      // Starting with the last run time, the number of runs it takes to get to
+      // a future time is the number of missed runs
+      const now = Date.now();
+      const runs = cronSchedule.getNextDatesIterator(new Date(lastRunTime));
+      for (const nextRun of runs) {
+        if (nextRun.getTime() > now) {
+          break;
+        }
+
+        ++missedRuns;
+      }
+    }
+
+    // Make up the missed runs, maxing out at makeUpMissedRuns if it is a
+    // number or no max if it is the string "all"
+    const makeUpRuns = options.makeUpMissedRuns === "all"
+      ? missedRuns
+      : Math.min(missedRuns, options.makeUpMissedRuns);
+    if (makeUpRuns > 0) {
+      await writeAllString(
+        Deno.stderr,
+        `Making up ${makeUpRuns} of ${missedRuns} missed runs for ${name}\n`,
+      );
+    }
+    for (let run = 0; run < makeUpRuns; ++run) {
+      await this.#executeJob(job);
+    }
   }
 
   // Stop and remove all jobs
   reset() {
     this.#abortController.abort();
+    this.#jobs.forEach((job) => {
+      if (job.type === "scheduled") {
+        this.#scheduler.unregisterTask(job.schedulerTaskId);
+      }
+    });
     this.#jobs.clear();
 
     // All future jobs will be linked to a new abort controller
@@ -248,6 +297,17 @@ export class ChronService {
     }
   }
 
+  // Return the most recent runs of a particular job
+  async #getLastRuns(job: string): Promise<RunStatusEntry[]> {
+    const runs = (await this.#statusDb.findMany({ name: job }));
+    runs
+      .sort((
+        r1,
+        r2,
+      ) => r2.timestamp - r1.timestamp);
+    return runs;
+  }
+
   // Handle HTTP requests
   async #httpHandler(req: Request): Promise<Response> {
     const url = new URL(req.url);
@@ -276,22 +336,18 @@ export class ChronService {
     if (command === "status") {
       if (req.method === "GET") {
         // Find the job's most recent three runs
-        const recentRuns = (await this.#statusDb.findMany({ name: job.name }))
-          .sort((
-            r1,
-            r2,
-          ) => r1.timestamp - r2.timestamp).slice(-3).map((
-            { timestamp, statusCode },
-          ) => ({
-            timestamp: new Date(timestamp).toISOString(),
-            statusCode,
-          }));
+        const recentRuns = (await this.#getLastRuns(job.name)).slice(0, 3).map((
+          { timestamp, statusCode },
+        ) => ({
+          timestamp: new Date(timestamp).toISOString(),
+          statusCode,
+        }));
         return Response.json({
           name: job.name,
           type: job.type,
           runs: recentRuns,
           nextRun: job.type === "scheduled"
-            ? job.schedule.next()?.toISOString()
+            ? job.schedule.getNextDate().toISOString()
             : undefined,
           pid: job.process?.pid,
         });
