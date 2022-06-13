@@ -2,7 +2,6 @@ import { ensureDir } from "https://deno.land/std@0.142.0/fs/mod.ts";
 import { serveFile } from "https://deno.land/std@0.142.0/http/file_server.ts";
 import { serve } from "https://deno.land/std@0.142.0/http/server.ts";
 import { join } from "https://deno.land/std@0.142.0/path/mod.ts";
-import { writeAll } from "https://deno.land/std@0.142.0/streams/conversion.ts";
 import { Database } from "https://denopkg.com/canac/AloeDB@0.9.1/mod.ts";
 import {
   Cron,
@@ -11,6 +10,7 @@ import {
 } from "https://cdn.skypack.dev/cron-schedule@3.0.6?dts";
 import { sleep } from "https://deno.land/x/sleep@v1.2.1/mod.ts";
 import { Mailbox } from "./mailbox.ts";
+import { logStderr, writeAllString } from "./util.ts";
 
 export type ScheduleOptions = {
   makeUpMissedRuns: number | "all";
@@ -35,16 +35,6 @@ function handleFsError(err: unknown): Response {
       { status: 500 },
     );
   }
-}
-
-// Write the content encoded as a UTF8 to the writer
-const encoder = new TextEncoder();
-async function writeAllString(
-  writer: Deno.Writer,
-  content: string,
-): Promise<void> {
-  const encoded = encoder.encode(content);
-  writeAll(writer, encoded);
 }
 
 // Represents either a startup job or a scheduled job
@@ -193,8 +183,7 @@ export class ChronService {
       ? missedRuns
       : Math.min(missedRuns, options.makeUpMissedRuns);
     if (makeUpRuns > 0) {
-      await writeAllString(
-        Deno.stderr,
+      await logStderr(
         `Making up ${makeUpRuns} of ${missedRuns} missed runs for ${name}\n`,
       );
     }
@@ -226,8 +215,7 @@ export class ChronService {
 
     const startTime = new Date();
 
-    await writeAllString(
-      Deno.stderr,
+    await logStderr(
       `${startTime.toISOString()} Running ${job.name}: ${job.command}\n`,
     );
 

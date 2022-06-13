@@ -1,6 +1,7 @@
 import { debounce } from "https://deno.land/std@0.142.0/async/debounce.ts";
 import { ChronService } from "./src/chron-service.ts";
 import { load } from "./src/chronfile.ts";
+import { logStderr } from "./src/util.ts";
 
 const port = parseInt(Deno.env.get("PORT") ?? "", 10);
 const chron = new ChronService({
@@ -19,7 +20,7 @@ await load(chron, chronfilePath);
 // Watch the chronfile and reload on changes
 const watcher = Deno.watchFs(chronfilePath);
 const debouncedLoad = debounce(async () => {
-  console.log("Chronfile changed. Reloading...");
+  await logStderr("Chronfile changed. Reloading...\n");
   try {
     await load(chron, chronfilePath);
   } catch (err) {
