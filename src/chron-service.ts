@@ -239,7 +239,7 @@ export class ChronService {
   // Throw an exception if the provided name is a valid job name
   // It must be in kebab case
   #validateName(name: string): void {
-    if (!/^[a-zA-Z0-9]+(-[a-zA-Z0-9]+)*$/.test(name)) {
+    if (name.length === 0 || !/^[a-zA-Z0-9]+(-[a-zA-Z0-9]+)*$/.test(name)) {
       throw new Error("Invalid job name");
     }
 
