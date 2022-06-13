@@ -8,9 +8,10 @@ const schema = z.object({
     z.object({
       schedule: z.string(),
       command: z.string(),
+      allowConcurrentRuns: z.boolean().default(false),
       makeUpMissedRuns: z.union([z.number().min(0), z.literal("all")])
         .default(0),
-    }),
+    }).strict(),
   )
     .default({}),
 });
@@ -27,8 +28,8 @@ export async function load(chron: ChronService, path: string): Promise<void> {
     chron.startup(name, command);
   });
   Object.entries(chronfile.schedule).forEach(
-    ([name, { schedule, command, makeUpMissedRuns }]) => {
-      chron.schedule(name, schedule, command, { makeUpMissedRuns });
+    ([name, { schedule, command, ...options }]) => {
+      chron.schedule(name, schedule, command, options);
     },
   );
 }

@@ -13,6 +13,7 @@ import { Mailbox } from "./mailbox.ts";
 import { handleFsError, logStderr, writeAllString } from "./util.ts";
 
 export type ScheduleOptions = {
+  allowConcurrentRuns: boolean;
   makeUpMissedRuns: number | "all";
 };
 
@@ -131,7 +132,14 @@ export class ChronService {
     const cronSchedule = parseCronExpression(schedule);
     const schedulerTaskId = this.#scheduler.registerTask(
       cronSchedule,
-      () => this.#executeJob(job),
+      async () => {
+        if (job.process && !options.allowConcurrentRuns) {
+          // A previous run of this job is still running
+          await logStderr(`Skipping ${name} because it is still running\n`);
+          return;
+        }
+        this.#executeJob(job);
+      },
     );
     const job: Job = {
       type: "scheduled",
