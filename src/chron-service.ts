@@ -10,7 +10,7 @@ import {
 } from "https://cdn.skypack.dev/cron-schedule@3.0.6?dts";
 import { sleep } from "https://deno.land/x/sleep@v1.2.1/mod.ts";
 import { Mailbox } from "./mailbox.ts";
-import { logStderr, writeAllString } from "./util.ts";
+import { handleFsError, logStderr, writeAllString } from "./util.ts";
 
 export type ScheduleOptions = {
   makeUpMissedRuns: number | "all";
@@ -22,20 +22,6 @@ type RunStatusEntry = {
   timestamp: number;
   statusCode?: number; // undefined while the command is running
 };
-
-// Helper for returning a response for filesystem errors
-function handleFsError(err: unknown): Response {
-  if (err instanceof Deno.errors.NotFound) {
-    return new Response("Not Found", {
-      status: 404,
-    });
-  } else {
-    return new Response(
-      err instanceof Error ? err.toString() : "Unknown error",
-      { status: 500 },
-    );
-  }
-}
 
 // Represents either a startup job or a scheduled job
 type Job =

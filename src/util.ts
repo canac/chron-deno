@@ -14,3 +14,17 @@ export async function writeAllString(
 export function logStderr(content: string): Promise<void> {
   return writeAllString(Deno.stderr, content);
 }
+
+// Helper for returning a response for filesystem errors
+export function handleFsError(err: unknown): Response {
+  if (err instanceof Deno.errors.NotFound) {
+    return new Response("Not Found", {
+      status: 404,
+    });
+  } else {
+    return new Response(
+      err instanceof Error ? err.toString() : "Unknown error",
+      { status: 500 },
+    );
+  }
+}
