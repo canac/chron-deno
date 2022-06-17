@@ -169,7 +169,7 @@ export class ChronService {
 
     // Count how many runs have been missed
     // If the job hasn't run before, then 0 runs have been missed
-    let missedRuns: number = 0;
+    let missedRuns = 0;
     const lastRunTime = (await this.getLastRuns(name))[0]?.timestamp;
     if (typeof lastRunTime !== "undefined") {
       // Starting with the last run time, the number of runs it takes to get to
