@@ -13,7 +13,15 @@ import { Mailbox } from "./mailbox.ts";
 import { handleFsError, logStderr, writeAllString } from "./util.ts";
 
 export type ScheduleOptions = {
+  // Specifies whether to allow multiple runs of the same job to run
+  // concurrently. If it is false, then scheduled runs of a job are ignored
+  // if the job is already running.
   allowConcurrentRuns: boolean;
+
+  // Specifies how many missed runs should be made up for when chron is first
+  // started. The number of missed runs is calculated based on the last time
+  // the job was run. If makeupMissedRuns is "all", there is no limit to the
+  // number of missed runs that will be made up.
   makeUpMissedRuns: number | "all";
 };
 
