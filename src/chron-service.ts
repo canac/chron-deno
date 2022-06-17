@@ -12,6 +12,11 @@ import { sleep } from "https://deno.land/x/sleep@v1.2.1/mod.ts";
 import { Mailbox } from "./mailbox.ts";
 import { handleFsError, logStderr, writeAllString } from "./util.ts";
 
+export type StartupOptions = {
+  // Specifies whether to restart the job if it exits.
+  keepAlive: boolean;
+};
+
 export type ScheduleOptions = {
   // Specifies whether to allow multiple runs of the same job to run
   // concurrently. If it is false, then scheduled runs of a job are ignored
@@ -96,6 +101,7 @@ export class ChronService {
   async startup(
     name: string,
     command: string,
+    options: StartupOptions,
   ) {
     this.#validateName(name);
 
@@ -119,6 +125,11 @@ export class ChronService {
       }
 
       await this.#executeJob(job);
+
+      if (!options.keepAlive) {
+        // Re-run if keeping alive
+        break;
+      }
 
       // Wait a few seconds before running again
       await sleep(5);
