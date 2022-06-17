@@ -247,7 +247,8 @@ export class ChronService {
     // Run the shell command and clone the log file after the it completes
     const env = this.#port
       ? {
-        CHRON_MAILBOX_URL: `http://0.0.0.0:${this.#port}/mailbox/${job.name}`,
+        CHRON_MAILBOX_URL:
+          `http://0.0.0.0:${this.#port}/job/mailbox/${job.name}`,
       }
       : undefined;
     const process = Deno.run({

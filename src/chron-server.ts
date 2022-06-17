@@ -15,32 +15,18 @@ export class ChronServer {
     });
   }
 
-  // Handle HTTP requests
-  async #httpHandler(req: Request): Promise<Response> {
-    const url = new URL(req.url);
-    if (req.method === "GET" && url.pathname === "/") {
-      return Response.json(
-        Array.from(this.#chron.getJobs().values()).map((job) => ({
-          name: job.name,
-          running: Boolean(job.process),
-        })),
-      );
-    }
-
-    const pattern = new URLPattern({ pathname: "/:job/:command" });
-    const matches = pattern.exec(req.url);
-    if (!matches) {
-      return new Response("Bad Request", { status: 400 });
-    }
-
-    const jobName = matches.pathname.groups.job;
+  // Handle job related HTTP requests
+  async #jobHandler(
+    req: Request,
+    jobName: string,
+    command: string,
+  ): Promise<Response> {
     const job = typeof jobName !== "undefined" &&
       this.#chron.getJobs().get(jobName);
     if (!job) {
       return new Response("Not Found", { status: 404 });
     }
 
-    const { command } = matches.pathname.groups;
     if (command === "status") {
       if (req.method === "GET") {
         // Find the job's most recent three runs
@@ -97,6 +83,62 @@ export class ChronServer {
       }
 
       return new Response("Invalid Method", { status: 405 });
+    }
+
+    return new Response("Not Found", { status: 404 });
+  }
+
+  // Handle mailbox related HTTP requests
+  async #mailboxHandler(
+    req: Request,
+    command: string,
+  ): Promise<Response> {
+    const mailbox = this.#chron.getMailbox();
+
+    if (command === "messages") {
+      if (req.method === "GET") {
+        return Response.json(await mailbox.getAllMessages());
+      } else if (req.method === "DELETE") {
+        return Response.json(await mailbox.clearAllMessages());
+      }
+    } else if (command === "count") {
+      const messages = await mailbox.getAllMessages();
+      return Response.json(messages.length);
+    }
+
+    return new Response("Invalid Method", { status: 405 });
+  }
+
+  // Handle HTTP requests
+  #httpHandler(req: Request): Response | Promise<Response> {
+    const url = new URL(req.url);
+    if (req.method === "GET" && url.pathname === "/") {
+      return Response.json(
+        Array.from(this.#chron.getJobs().values()).map((job) => ({
+          name: job.name,
+          running: Boolean(job.process),
+        })),
+      );
+    }
+
+    const jobPattern = new URLPattern({ pathname: "/job/:job/:command" });
+    const jobMatches = jobPattern.exec(req.url);
+    if (jobMatches) {
+      const { job, command } = jobMatches.pathname.groups;
+      if (typeof job === "undefined" || typeof command === "undefined") {
+        throw new Error("Invalid pattern");
+      }
+      return this.#jobHandler(req, job, command);
+    }
+
+    const mailboxPattern = new URLPattern({ pathname: "/mailbox/:command" });
+    const mailboxMatches = mailboxPattern.exec(req.url);
+    if (mailboxMatches) {
+      const { command } = mailboxMatches.pathname.groups;
+      if (typeof command === "undefined") {
+        throw new Error("Invalid pattern");
+      }
+      return this.#mailboxHandler(req, command);
     }
 
     return new Response("Bad Request", { status: 400 });

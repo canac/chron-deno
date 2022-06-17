@@ -13,6 +13,11 @@ export class Mailbox {
     this.#db = new Database<Message>(`${dataDir}/mailbox.json`);
   }
 
+  // Return all messages
+  getAllMessages(): Promise<Message[]> {
+    return this.#db.findMany({});
+  }
+
   // Return all messages for this source
   getMessages(source: string): Promise<Message[]> {
     return this.#db.findMany({ source });
@@ -25,6 +30,11 @@ export class Mailbox {
       timestamp: new Date().toString(),
       message,
     });
+  }
+
+  // Remove all messages and return them
+  clearAllMessages(): Promise<Message[]> {
+    return this.#db.deleteMany({});
   }
 
   // Remove all the messages for this source and return them
