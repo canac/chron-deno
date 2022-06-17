@@ -208,7 +208,7 @@ export class ChronService {
     this.#abortController = new AbortController();
   }
 
-  // Helper function to execute a command with the environment and logging configured
+  // Helper function to execute a job with the environment and logging configured
   async #executeJob(job: Job) {
     if (job.abortSignal.aborted) {
       // Abort because the job is already marked as aborted
