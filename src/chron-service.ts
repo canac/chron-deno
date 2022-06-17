@@ -248,7 +248,7 @@ export class ChronService {
     const env = this.#port
       ? {
         CHRON_MAILBOX_URL:
-          `http://0.0.0.0:${this.#port}/job/mailbox/${job.name}`,
+          `http://0.0.0.0:${this.#port}/job/${job.name}/mailbox`,
       }
       : undefined;
     const process = Deno.run({
