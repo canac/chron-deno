@@ -3,9 +3,15 @@ import { ChronService } from "./src/chron-service.ts";
 import { load } from "./src/chronfile.ts";
 import { logStderr } from "./src/util.ts";
 
-const port = parseInt(Deno.env.get("PORT") ?? "", 10);
+const rawPort = Deno.env.get("PORT") ?? "";
+const port = parseInt(rawPort, 10);
+if (Number.isNaN(port)) {
+  await logStderr(`Invalid port "${rawPort}"`);
+  Deno.exit(1);
+}
+
 const chron = new ChronService({
-  port: Number.isNaN(port) ? undefined : port,
+  port,
   chronDir: `${Deno.env.get("HOME")}/.local/share/chron`,
 });
 

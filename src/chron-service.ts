@@ -1,6 +1,4 @@
 import { ensureDir } from "https://deno.land/std@0.142.0/fs/mod.ts";
-import { serveFile } from "https://deno.land/std@0.142.0/http/file_server.ts";
-import { serve } from "https://deno.land/std@0.142.0/http/server.ts";
 import { join } from "https://deno.land/std@0.142.0/path/mod.ts";
 import { Database } from "https://denopkg.com/canac/AloeDB@0.9.1/mod.ts";
 import {
@@ -9,8 +7,9 @@ import {
   parseCronExpression,
 } from "https://cdn.skypack.dev/cron-schedule@3.0.6?dts";
 import { sleep } from "https://deno.land/x/sleep@v1.2.1/mod.ts";
+import { ChronServer } from "./chron-server.ts";
 import { Mailbox } from "./mailbox.ts";
-import { handleFsError, logStderr, writeAllString } from "./util.ts";
+import { logStderr, writeAllString } from "./util.ts";
 
 export type StartupOptions = {
   // Specifies whether to restart the job if it exits.
@@ -70,17 +69,18 @@ type Job =
 export class ChronService {
   #chronDir: string;
   #logDir: string;
-  #port: number | undefined;
+  #port: number;
 
   #statusDb: Database<RunStatusEntry>;
   #jobs = new Map<string, Job>();
   #abortController = new AbortController();
   #scheduler = new IntervalBasedCronScheduler(1000);
   #mailbox: Mailbox;
+  #server: ChronServer;
 
-  // `port` is the port that the HTTP server will listen on, or null to not start the server
+  // `port` is the port that the HTTP server will listen on
   // `chronDir` is the directory to store data and logs, defaulting to the current directory
-  constructor(options: { port?: number; chronDir?: string } = {}) {
+  constructor(options: { port: number; chronDir?: string }) {
     this.#chronDir = options.chronDir ?? ".";
     this.#logDir = join(this.#chronDir, "logs");
     this.#statusDb = new Database<RunStatusEntry>(
@@ -89,12 +89,7 @@ export class ChronService {
     this.#mailbox = new Mailbox(this.#chronDir);
 
     this.#port = options.port;
-    if (typeof this.#port !== "undefined") {
-      serve((req) => this.#httpHandler(req), {
-        port: this.#port,
-        onListen: undefined,
-      });
-    }
+    this.#server = new ChronServer(this);
   }
 
   // Register a job to run on startup
@@ -175,7 +170,7 @@ export class ChronService {
     // Count how many runs have been missed
     // If the job hasn't run before, then 0 runs have been missed
     let missedRuns: number = 0;
-    const lastRunTime = (await this.#getLastRuns(name))[0]?.timestamp;
+    const lastRunTime = (await this.getLastRuns(name))[0]?.timestamp;
     if (typeof lastRunTime !== "undefined") {
       // Starting with the last run time, the number of runs it takes to get to
       // a future time is the number of missed runs
@@ -298,8 +293,13 @@ export class ChronService {
     }
   }
 
+  // Return the port that the HTTP server is running on
+  getServerPort(): number {
+    return this.#port;
+  }
+
   // Return the most recent runs of a particular job
-  async #getLastRuns(job: string): Promise<RunStatusEntry[]> {
+  async getLastRuns(job: string): Promise<RunStatusEntry[]> {
     const runs = (await this.#statusDb.findMany({ name: job }));
     runs
       .sort((
@@ -309,87 +309,13 @@ export class ChronService {
     return runs;
   }
 
-  // Handle HTTP requests
-  async #httpHandler(req: Request): Promise<Response> {
-    const url = new URL(req.url);
-    if (req.method === "GET" && url.pathname === "/") {
-      return Response.json(
-        Array.from(this.#jobs.values()).map((job) => ({
-          name: job.name,
-          running: Boolean(job.process),
-        })),
-      );
-    }
+  // Return the registered jobs
+  getJobs(): Map<string, Job> {
+    return this.#jobs;
+  }
 
-    const pattern = new URLPattern({ pathname: "/:job/:command" });
-    const matches = pattern.exec(req.url);
-    if (!matches) {
-      return new Response("Bad Request", { status: 400 });
-    }
-
-    const jobName = matches.pathname.groups.job;
-    const job = typeof jobName !== "undefined" && this.#jobs.get(jobName);
-    if (!job) {
-      return new Response("Not Found", { status: 404 });
-    }
-
-    const { command } = matches.pathname.groups;
-    if (command === "status") {
-      if (req.method === "GET") {
-        // Find the job's most recent three runs
-        const recentRuns = (await this.#getLastRuns(job.name)).slice(0, 3).map((
-          { timestamp, statusCode },
-        ) => ({
-          timestamp: new Date(timestamp).toISOString(),
-          statusCode,
-        }));
-        return Response.json({
-          name: job.name,
-          type: job.type,
-          runs: recentRuns,
-          nextRun: job.type === "scheduled"
-            ? job.schedule.getNextDate().toISOString()
-            : undefined,
-          pid: job.process?.pid,
-        });
-      }
-
-      return new Response("Invalid Method", { status: 405 });
-    } else if (command === "logs") {
-      if (req.method === "GET") {
-        return serveFile(req, job.logFile).catch(handleFsError);
-      } else if (req.method === "DELETE") {
-        return Deno.remove(job.logFile)
-          .then(() => new Response("Deleted log file"))
-          .catch(handleFsError);
-      }
-
-      return new Response("Invalid Method", { status: 405 });
-    } else if (command === "mailbox") {
-      if (req.method === "GET") {
-        return Response.json(await this.#mailbox.getMessages(job.name));
-      } else if (req.method === "POST") {
-        return Response.json(
-          await this.#mailbox.addMessage(job.name, await req.text()),
-        );
-      } else if (req.method === "DELETE") {
-        return Response.json(await this.#mailbox.clearMessages(job.name));
-      }
-
-      return new Response("Invalid Method", { status: 405 });
-    } else if (command === "terminate") {
-      if (req.method === "POST") {
-        if (job.process) {
-          job.process.kill("SIGTERM");
-          return new Response("Terminated job");
-        } else {
-          return new Response("Job not running");
-        }
-      }
-
-      return new Response("Invalid Method", { status: 405 });
-    }
-
-    return new Response("Bad Request", { status: 400 });
+  // Return the mailbox
+  getMailbox(): Mailbox {
+    return this.#mailbox;
   }
 }
