@@ -59,19 +59,6 @@ export class ChronServer {
       }
 
       return new Response("Invalid Method", { status: 405 });
-    } else if (command === "mailbox") {
-      const mailbox = this.#chron.getMailbox();
-      if (req.method === "GET") {
-        return Response.json(await mailbox.getMessages(job.name));
-      } else if (req.method === "POST") {
-        return Response.json(
-          await mailbox.addMessage(job.name, await req.text()),
-        );
-      } else if (req.method === "DELETE") {
-        return Response.json(await mailbox.clearMessages(job.name));
-      }
-
-      return new Response("Invalid Method", { status: 405 });
     } else if (command === "terminate") {
       if (req.method === "POST") {
         if (job.process) {
@@ -86,27 +73,6 @@ export class ChronServer {
     }
 
     return new Response("Not Found", { status: 404 });
-  }
-
-  // Handle mailbox related HTTP requests
-  async #mailboxHandler(
-    req: Request,
-    command: string,
-  ): Promise<Response> {
-    const mailbox = this.#chron.getMailbox();
-
-    if (command === "messages") {
-      if (req.method === "GET") {
-        return Response.json(await mailbox.getAllMessages());
-      } else if (req.method === "DELETE") {
-        return Response.json(await mailbox.clearAllMessages());
-      }
-    } else if (command === "count") {
-      const messages = await mailbox.getAllMessages();
-      return Response.json(messages.length);
-    }
-
-    return new Response("Invalid Method", { status: 405 });
   }
 
   // Handle HTTP requests
@@ -129,16 +95,6 @@ export class ChronServer {
         throw new Error("Invalid pattern");
       }
       return this.#jobHandler(req, job, command);
-    }
-
-    const mailboxPattern = new URLPattern({ pathname: "/mailbox/:command" });
-    const mailboxMatches = mailboxPattern.exec(req.url);
-    if (mailboxMatches) {
-      const { command } = mailboxMatches.pathname.groups;
-      if (typeof command === "undefined") {
-        throw new Error("Invalid pattern");
-      }
-      return this.#mailboxHandler(req, command);
     }
 
     return new Response("Bad Request", { status: 400 });

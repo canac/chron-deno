@@ -8,7 +8,6 @@ import {
 } from "https://cdn.skypack.dev/cron-schedule@3.0.6?dts";
 import { sleep } from "https://deno.land/x/sleep@v1.2.1/mod.ts";
 import { ChronServer } from "./chron-server.ts";
-import { Mailbox } from "./mailbox.ts";
 import { logStderr, writeAllString } from "./util.ts";
 
 export type StartupOptions = {
@@ -75,7 +74,6 @@ export class ChronService {
   #jobs = new Map<string, Job>();
   #abortController = new AbortController();
   #scheduler = new IntervalBasedCronScheduler(1000);
-  #mailbox: Mailbox;
   #server: ChronServer;
 
   // `port` is the port that the HTTP server will listen on
@@ -86,7 +84,6 @@ export class ChronService {
     this.#statusDb = new Database<RunStatusEntry>(
       join(this.#chronDir, "jobStatus.json"),
     );
-    this.#mailbox = new Mailbox(this.#chronDir);
 
     this.#port = options.port;
     this.#server = new ChronServer(this);
@@ -245,17 +242,10 @@ export class ChronService {
     await writeAllString(logFile, `${startTime.toString()}\n${divider}\n`);
 
     // Run the shell command and clone the log file after the it completes
-    const env = this.#port
-      ? {
-        CHRON_MAILBOX_URL:
-          `http://0.0.0.0:${this.#port}/job/${job.name}/mailbox`,
-      }
-      : undefined;
     const process = Deno.run({
       cmd: ["sh", "-c", job.command],
       stdout: logFile.rid,
       stderr: logFile.rid,
-      env,
     });
     job.process = process;
     const onAbort = () => {
@@ -270,11 +260,15 @@ export class ChronService {
     await this.#statusDb.updateOne({ id }, { statusCode: status.code });
 
     if (!status.success) {
-      // Post failures to the @errors mailbox
-      this.#mailbox.addMessage(
-        "@errors",
-        `${job.name} failed with status code ${status.code}`,
-      );
+      await Deno.run({
+        stdout: "null",
+        cmd: [
+          "mailbox",
+          "add",
+          "chron",
+          `${job.name} failed with status code ${status.code}`,
+        ],
+      }).status();
     }
 
     // Write the log file footer and close the log file
@@ -313,10 +307,5 @@ export class ChronService {
   // Return the registered jobs
   getJobs(): Map<string, Job> {
     return this.#jobs;
-  }
-
-  // Return the mailbox
-  getMailbox(): Mailbox {
-    return this.#mailbox;
   }
 }
